@@ -1,0 +1,135 @@
+---
+title: "GSOC 2026 – torchvision Hard Tests"
+output:
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+## Hard Test 1 – Complete `draw_keypoints()`
+
+The task was to R-ise and vectorise the TODO block in
+[`vision_utils.R` lines 476–492](https://github.com/mlverse/torchvision/blob/ba200df59094e25f4da52b096c06228996dd4da6/R/vision_utils.R#L476-L492),
+implementing connectivity line drawing between keypoints.
+
+```{r test1-setup}
+library(torch)
+library(magick)
+library(png)
+
+source("hard_test_1_draw_keypoints/vision_utils_patched.R")
+
+set.seed(42)
+image     <- torch_randint(190L, 255L, size = c(3L, 360L, 360L))$to(torch_uint8())
+keypoints <- torch_randint(low = 60L, high = 300L, size = c(4L, 5L, 2L))
+connectivity <- list(c(1L,2L), c(2L,3L), c(3L,4L), c(4L,5L))
+```
+
+```{r test1-run}
+result <- draw_keypoints(image, keypoints,
+                         connectivity = connectivity,
+                         colors = c("red", "blue", "green", "orange"),
+                         radius = 4, width = 2)
+
+cat("Output shape:", paste(result$shape, collapse = "x"), "\n")
+cat("Output dtype: uint8 =", result$dtype == torch_uint8(), "\n")
+```
+
+```{r test1-image, fig.cap="4 pose instances with keypoints and skeleton connectivity lines"}
+arr <- result$to(dtype = torch_float())$div(255)$permute(c(2L,3L,1L))$to(device="cpu") |> as.array()
+grid::grid.raster(arr)
+```
+
+```{r test1-assertions}
+# Shape preserved
+stopifnot(all(result$shape == c(3L, 360L, 360L)))
+
+# dtype is uint8
+stopifnot(result$dtype == torch_uint8())
+
+# Pixels were actually drawn (output differs from input)
+diff <- (result$to(dtype=torch_float()) - image$to(dtype=torch_float()))$abs()$sum()$item()
+cat("Total pixels modified:", diff, "\n")
+stopifnot(diff > 0)
+
+# Float input also works
+image_f <- image$to(dtype = torch_float())$div(255)
+result_f <- draw_keypoints(image_f, keypoints, connectivity = connectivity)
+stopifnot(result_f$dtype == torch_uint8())
+
+cat("All Hard Test 1 assertions PASSED\n")
+```
+
+---
+
+## Hard Test 2 – Rcpp Interface
+
+The task was to demonstrate exposing a C++ function to R via Rcpp.
+Two functions were implemented: `nms_cpp()` (Non-Maximum Suppression)
+and `keypoint_distances_cpp()` (pairwise keypoint distances).
+
+```{r test2-compile}
+library(Rcpp)
+Rcpp::sourceCpp("hard_test_2_rcpp/keypoint_ops.cpp")
+cat("C++ compiled and loaded successfully\n")
+```
+
+### NMS
+
+```{r test2-nms}
+boxes <- matrix(c(
+  10,  10,  60,  60,
+  12,  12,  62,  62,
+  15,  15,  55,  55,
+  200, 200, 250, 250,
+  202, 202, 252, 252,
+  400, 100, 480, 180
+), ncol = 4, byrow = TRUE)
+scores <- c(0.90, 0.75, 0.60, 0.95, 0.85, 0.70)
+
+kept <- nms_cpp(boxes, scores, iou_threshold = 0.5)
+cat("Kept box indices:", kept, "\n")
+cat("Suppressed:", setdiff(seq_len(nrow(boxes)), kept), "\n")
+
+stopifnot(setequal(kept, c(1L, 4L, 6L)))
+cat("NMS assertion PASSED\n")
+```
+
+### Keypoint distances
+
+```{r test2-distances}
+kpts <- matrix(c(0,0, 0,80, 60,80, 30,160), ncol = 2, byrow = TRUE)
+rownames(kpts) <- c("head", "l_shoulder", "r_shoulder", "hip")
+
+D <- keypoint_distances_cpp(kpts)
+round(D, 2)
+```
+
+```{r test2-distance-assertions}
+stopifnot(abs(D["head", "l_shoulder"]       -  80) < 1e-9)
+stopifnot(abs(D["l_shoulder", "r_shoulder"] -  60) < 1e-9)
+stopifnot(abs(D["head", "r_shoulder"]       - 100) < 1e-9)
+stopifnot(all(diag(D) == 0))
+stopifnot(all(D == t(D)))
+cat("Distance assertions PASSED\n")
+```
+
+### Benchmark – 1000 boxes
+
+```{r test2-benchmark}
+set.seed(42)
+N  <- 1000L
+x1 <- runif(N, 0, 500); y1 <- runif(N, 0, 500)
+x2 <- x1 + runif(N, 10, 100); y2 <- y1 + runif(N, 10, 100)
+
+t0      <- proc.time()
+kept    <- nms_cpp(cbind(x1, y1, x2, y2), runif(N))
+elapsed <- (proc.time() - t0)[["elapsed"]]
+
+cat(sprintf("NMS on %d boxes: kept %d  |  elapsed %.4f s\n", N, length(kept), elapsed))
+```
