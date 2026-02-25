@@ -1,5 +1,5 @@
 ---
-title: "GSOC 2026 – torchvision Hard Tests"
+title: "GSOC 2026 – torchvision Qualifying Tests"
 output:
   html_document:
     theme: flatly
@@ -133,3 +133,124 @@ elapsed <- (proc.time() - t0)[["elapsed"]]
 
 cat(sprintf("NMS on %d boxes: kept %d  |  elapsed %.4f s\n", N, length(kept), elapsed))
 ```
+
+---
+
+## Easy Test – Faster R-CNN Article
+
+The task was to write an article demonstrating `model_fasterrcnn_resnet50_fpn_v2()`
+in the style of the existing `fcnresnet` vignette. Key discoveries during development:
+
+- Input must be a **4-D batch tensor** via `torch_stack()`, not a plain R list
+- Output is accessed as `output$detections[[i]]`, each with `$boxes`, `$labels`, `$scores`
+- `score_thresh = 0.01` needed (model yields low scores with current torch version)
+- `valid_boxes()` required to filter degenerate boxes produced at low confidence
+- `safe_labels()` with `tryCatch` fallback for when `coco_label()` needs network
+
+```{r easy-setup, message=FALSE, warning=FALSE}
+library(torch)
+library(torchvision)
+```
+
+```{r easy-load-images}
+url1 <- "https://raw.githubusercontent.com/pytorch/vision/main/gallery/assets/dog1.jpg"
+url2 <- "https://raw.githubusercontent.com/pytorch/vision/main/gallery/assets/dog2.jpg"
+
+dog1 <- magick_loader(url1) %>% transform_to_tensor()
+dog2 <- magick_loader(url2) %>% transform_to_tensor()
+
+dog_batch <- torch_stack(list(dog1, dog2))
+cat("Batch shape:", paste(dim(dog_batch), collapse = "x"), "\n")
+```
+
+```{r easy-inference}
+model <- model_fasterrcnn_resnet50_fpn_v2(pretrained = TRUE,
+                                          score_thresh = 0.01,
+                                          nms_thresh   = 0.5)
+model$eval()
+output <- model(dog_batch)
+
+det1 <- output$detections[[1]]
+det2 <- output$detections[[2]]
+cat("Image 1:", as.integer(det1$boxes$size(1)), "detections\n")
+cat("Image 2:", as.integer(det2$boxes$size(1)), "detections\n")
+```
+
+```{r easy-helpers}
+top_k <- function(det, k = 5) {
+  n <- as.integer(det$boxes$size(1))
+  if (n == 0) return(det)
+  idx <- seq_len(min(k, n))
+  list(boxes = det$boxes[idx, ], labels = det$labels[idx], scores = det$scores[idx])
+}
+
+safe_labels <- function(label_tensor) {
+  ids <- as.integer(label_tensor)
+  tryCatch(coco_label(ids), error = function(e) paste0("class_", ids))
+}
+
+valid_boxes <- function(det) {
+  n <- as.integer(det$boxes$size(1))
+  if (n == 0) return(det)
+  b    <- as.matrix(det$boxes$to(device = "cpu") |> as.array())
+  keep <- which((b[, 3] > b[, 1]) & (b[, 4] > b[, 2]))
+  list(boxes  = det$boxes[keep, , drop = FALSE],
+       labels = det$labels[keep],
+       scores = det$scores[keep])
+}
+
+top1 <- top_k(det1); top2 <- top_k(det2)
+cat("Labels for dog1:", paste(safe_labels(top1$labels), collapse = ", "), "\n")
+```
+
+```{r easy-draw-dog1, fig.cap="Dog 1 – top-5 detections with bounding boxes"}
+draw_detections <- function(image, det) {
+  det <- valid_boxes(det)
+  n   <- length(as.integer(det$labels))
+  if (n == 0) return((image * 255)$to(dtype = torch_uint8()))
+  draw_bounding_boxes(
+    (image * 255)$to(dtype = torch_uint8()),
+    boxes  = det$boxes$view(c(-1L, 4L)),
+    labels = safe_labels(det$labels)
+  )
+}
+
+result1 <- draw_detections(dog1, top1)
+arr1 <- result1$to(dtype = torch_float())$div(255)$permute(c(2L, 3L, 1L)) |> as.array()
+grid::grid.raster(arr1)
+```
+
+```{r easy-draw-dog2, fig.cap="Dog 2 – top-5 detections with bounding boxes"}
+result2 <- draw_detections(dog2, top2)
+arr2 <- result2$to(dtype = torch_float())$div(255)$permute(c(2L, 3L, 1L)) |> as.array()
+grid::grid.raster(arr2)
+```
+
+```{r easy-v1v2}
+model_v1 <- model_fasterrcnn_resnet50_fpn(pretrained = TRUE,
+                                          score_thresh = 0.01,
+                                          nms_thresh   = 0.5)
+model_v1$eval()
+out_v1 <- model_v1(dog_batch)
+cat("v1 detections on dog1:", as.integer(out_v1$detections[[1]]$boxes$size(1)), "\n")
+cat("v2 detections on dog1:", as.integer(det1$boxes$size(1)), "\n")
+```
+
+---
+
+## Medium Test – Documentation Fix PR
+
+Fixed three documentation bugs in `draw_keypoints()` in `R/vision_utils.R`:
+
+1. **`connectivity` parameter**: Changed type annotation from `Vector` to `List`,
+   removed stale "(currently unavailable)" note, and updated the description with
+   a concrete usage example (`list(c(1, 2), c(2, 3))`).
+
+2. **`colors` parameter**: Corrected "viridis" → "rainbow" (the function uses
+   `grDevices::rainbow()`) and "boxes" → "keypoints".
+
+3. **Error message typo**: Fixed "but is current shape is" → "but current shape is".
+
+The fixes were applied to both `R/vision_utils.R` (roxygen comments) and the
+generated `man/draw_keypoints.Rd`, with a `NEWS.md` entry. See
+`medium_test_pr/` for the complete diff.
