@@ -415,9 +415,9 @@ draw_segmentation_masks.image_with_segmentation_mask <- function(x,
 #'              In case of dtype float, values are assumed to be in range \eqn{[0, 1]}.
 #' @param keypoints Tensor of shape (N, K, 2) the K keypoints location for each of the N detected poses instance,
 #         in the format c(x, y).
-#' @param connectivity List of integer pairs \code{c(i, j)} specifying which
-#'   keypoints to connect with a line, e.g. \code{list(c(1, 2), c(2, 3))}.
-#'   \code{NULL} (default) draws no connecting lines.
+#' @param connectivity List of integer pairs `c(i, j)` specifying which
+#'            keypoints to connect with a line, e.g. `list(c(1, 2), c(2, 3))`.
+#'            `NULL` (default) draws no connecting lines.
 #' @param colors character vector containing the colors
 #'            of the keypoints or single color for all keypoints. The color can be represented as
 #'            strings e.g. "red" or "#FF00FF". By default, rainbow colors are generated for keypoints
