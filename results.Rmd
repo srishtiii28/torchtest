@@ -231,7 +231,7 @@ arr1 <- result1$to(dtype = torch_float())$div(255)$permute(c(2L, 3L, 1L)) |> as.
 grid::grid.raster(arr1)
 ```
 
-```{r easy-draw-dog2, fig.cap="Dog 2 – top-5 detections with bounding boxes"}
+```{r easy-draw-dog2, fig.cap="Dog 2 – top-5 detections (note: degenerate boxes filtered; model requires torch ≥ 0.17 for correct output)"}
 result2 <- draw_detections(dog2, top2)
 arr2 <- result2$to(dtype = torch_float())$div(255)$permute(c(2L, 3L, 1L)) |> as.array()
 grid::grid.raster(arr2)
@@ -263,5 +263,6 @@ Fixed three documentation bugs in `draw_keypoints()` in `R/vision_utils.R`:
 3. **Error message typo**: Fixed "but is current shape is" → "but current shape is".
 
 The fixes were applied to both `R/vision_utils.R` (roxygen comments) and the
-generated `man/draw_keypoints.Rd`, with a `NEWS.md` entry. See
-`medium_test_pr/` for the complete diff.
+generated `man/draw_keypoints.Rd`, with a `NEWS.md` entry.
+
+**Pull request**: [mlverse/torchvision#296](https://github.com/mlverse/torchvision/pull/296)
