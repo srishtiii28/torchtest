@@ -184,16 +184,24 @@ top_k <- function(det, k = 5) {
   list(boxes = det$boxes[idx, ], labels = det$labels[idx], scores = det$scores[idx])
 }
 
-safe_labels <- function(label_tensor) {
-  ids <- as.integer(label_tensor)
-  tryCatch(coco_label(ids), error = function(e) paste0("class_", ids))
+# Appends confidence score to each label: "dog: 0.045"
+safe_labels <- function(label_tensor, score_tensor = NULL) {
+  ids   <- as.integer(label_tensor)
+  names <- tryCatch(coco_label(ids), error = function(e) paste0("class_", ids))
+  if (is.null(score_tensor)) return(names)
+  paste0(names, ": ", round(as.numeric(score_tensor), 3))
 }
 
-valid_boxes <- function(det) {
+# Rejects boxes that are geometrically invalid or too small (area < min_area).
+# Note: with torch < 0.17 the pretrained v2 weights produce degenerate
+# boxes (x2 < x1) at near-uniform low scores (~0.026); this filters them out.
+valid_boxes <- function(det, min_area = 400) {
   n <- as.integer(det$boxes$size(1))
   if (n == 0) return(det)
   b    <- as.matrix(det$boxes$to(device = "cpu") |> as.array())
-  keep <- which((b[, 3] > b[, 1]) & (b[, 4] > b[, 2]))
+  area <- (b[, 3] - b[, 1]) * (b[, 4] - b[, 2])
+  keep <- which((b[, 3] > b[, 1]) & (b[, 4] > b[, 2]) & (area >= min_area))
+  if (length(keep) == 0) return(list(boxes = NULL, labels = NULL, scores = NULL))
   list(boxes  = det$boxes[keep, , drop = FALSE],
        labels = det$labels[keep],
        scores = det$scores[keep])
@@ -203,15 +211,18 @@ top1 <- top_k(det1); top2 <- top_k(det2)
 cat("Labels for dog1:", paste(safe_labels(top1$labels), collapse = ", "), "\n")
 ```
 
-```{r easy-draw-dog1, fig.cap="Dog 1 – top-5 detections with bounding boxes"}
+```{r easy-draw-dog1, fig.cap="Dog 1 – top-5 detections (note: degenerate boxes filtered; model requires torch ≥ 0.17 for correct output)"}
 draw_detections <- function(image, det) {
   det <- valid_boxes(det)
-  n   <- length(as.integer(det$labels))
-  if (n == 0) return((image * 255)$to(dtype = torch_uint8()))
+  n   <- if (is.null(det$labels)) 0L else length(as.integer(det$labels))
+  if (n == 0) {
+    message("No valid detections after filtering (torch version incompatibility).")
+    return((image * 255)$to(dtype = torch_uint8()))
+  }
   draw_bounding_boxes(
     (image * 255)$to(dtype = torch_uint8()),
     boxes  = det$boxes$view(c(-1L, 4L)),
-    labels = safe_labels(det$labels)
+    labels = safe_labels(det$labels, det$scores)
   )
 }
 
