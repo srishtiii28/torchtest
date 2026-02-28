@@ -66,21 +66,28 @@ top1 <- top_k(det1)
 top2 <- top_k(det2)
 
 
-# Decode COCO labels (requires network; falls back to integer indices) ------
-safe_labels <- function(label_tensor) {
-  ids <- as.integer(label_tensor)
-  tryCatch(
-    coco_label(ids),
-    error = function(e) paste0("class_", ids)
-  )
+# Decode COCO labels and append confidence score for transparency.
+# e.g. "dog: 0.045"  — makes low-confidence detections immediately obvious.
+safe_labels <- function(label_tensor, score_tensor = NULL) {
+  ids    <- as.integer(label_tensor)
+  names  <- tryCatch(coco_label(ids), error = function(e) paste0("class_", ids))
+  if (is.null(score_tensor)) return(names)
+  scores <- round(as.numeric(score_tensor), 3)
+  paste0(names, ": ", scores)
 }
 
-# Filter geometrically invalid boxes (x1 >= x2 or y1 >= y2)
-valid_boxes <- function(det) {
+# Filter geometrically invalid or tiny boxes.
+# Removes boxes where x1 >= x2, y1 >= y2, or area < min_area pixels.
+# Note: with torch < 0.17, pretrained Faster R-CNN v2 weights produce
+# degenerate boxes (x2 < x1) at near-uniform low scores (~0.026).
+# valid_boxes() catches these; draw_detections() handles the empty result.
+valid_boxes <- function(det, min_area = 400) {
   n <- as.integer(det$boxes$size(1))
   if (n == 0) return(det)
   b    <- as.matrix(det$boxes$to(device = "cpu") |> as.array())
-  keep <- which((b[, 3] > b[, 1]) & (b[, 4] > b[, 2]))
+  area <- (b[, 3] - b[, 1]) * (b[, 4] - b[, 2])
+  keep <- which((b[, 3] > b[, 1]) & (b[, 4] > b[, 2]) & (area >= min_area))
+  if (length(keep) == 0) return(list(boxes = NULL, labels = NULL, scores = NULL))
   list(
     boxes  = det$boxes[keep, , drop = FALSE],
     labels = det$labels[keep],
@@ -94,12 +101,15 @@ valid_boxes <- function(det) {
 
 draw_detections <- function(image, det) {
   det <- valid_boxes(det)
-  n   <- length(as.integer(det$labels))
-  if (n == 0) return((image * 255)$to(dtype = torch_uint8()))
+  n   <- if (is.null(det$labels)) 0L else length(as.integer(det$labels))
+  if (n == 0) {
+    message("No valid detections to draw.")
+    return((image * 255)$to(dtype = torch_uint8()))
+  }
   draw_bounding_boxes(
     (image * 255)$to(dtype = torch_uint8()),
     boxes  = det$boxes$view(c(-1L, 4L)),
-    labels = safe_labels(det$labels)
+    labels = safe_labels(det$labels, det$scores)
   )
 }
 
